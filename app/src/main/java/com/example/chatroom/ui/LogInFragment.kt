@@ -5,6 +5,7 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
+import androidx.activity.addCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.fragment.app.Fragment
 import androidx.navigation.fragment.findNavController
@@ -20,8 +21,6 @@ class LogInFragment : Fragment() {
     private var _binding: FragmentLogInBinding? = null
     private val binding get() = _binding!!
 
-
-
     @Inject
     lateinit var mAuth: FirebaseAuth
 
@@ -29,7 +28,7 @@ class LogInFragment : Fragment() {
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
-    ): View? {
+    ): View {
         _binding = FragmentLogInBinding.inflate(inflater, container, false)
         return binding.root
     }
@@ -49,6 +48,11 @@ class LogInFragment : Fragment() {
         //hide action bar
         (requireActivity() as AppCompatActivity).supportActionBar?.hide()
 
+        //custom back navigation
+        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner) {
+            activity?.finish()
+        }
+
         binding.logInScreenSignUpButton.setOnClickListener {
             findNavController().navigate(R.id.action_logInFragment_to_signUpFragment)
         }
@@ -65,10 +69,10 @@ class LogInFragment : Fragment() {
         mAuth.signInWithEmailAndPassword(email, password)
             .addOnCompleteListener(requireActivity()) { task ->
                 if (task.isSuccessful) {
-                    // Sign in success, update UI with the signed-in user's information
+                    // Log in success, update UI with the log-in user's information
                     findNavController().navigate(R.id.action_logInFragment_to_listOfUsersFragment)
                 } else {
-                    // If sign in fails, display a message to the user.
+                    // If log in fails, display a message to the user.
                     Toast.makeText(requireContext(), "User does not exist", Toast.LENGTH_SHORT)
                         .show()
                 }
