@@ -15,14 +15,36 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.DatabaseReference
 import com.google.firebase.database.ValueEventListener
+import com.google.firebase.messaging.FirebaseMessaging
 import dagger.hilt.android.lifecycle.HiltViewModel
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import org.json.JSONObject
+import java.io.IOException
 import javax.inject.Inject
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
+
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     var mDatabaseRef: DatabaseReference,
     var mAuth: FirebaseAuth
-    ) : ViewModel() {
+) : ViewModel() {
+
+    private val _fcmToken = MutableLiveData("token")
+    val fcmToken: LiveData<String>
+        get() = _fcmToken
+
+    private val _currentUserName = MutableLiveData("name")
+    val currentUserName: LiveData<String>
+        get() = _currentUserName
 
     private val _userName = MutableLiveData("name")
     val userName: LiveData<String>
@@ -32,6 +54,25 @@ class ChatViewModel @Inject constructor(
     val uid: LiveData<String>
         get() = _uid
 
+    private val _senderRoom = MutableLiveData("senderRoom")
+    val senderRoom: LiveData<String>
+        get() = _senderRoom
+
+    private val _receiverRoom = MutableLiveData("receiverRoom")
+    val receiverRoom: LiveData<String>
+        get() = _receiverRoom
+
+    private val _apiKey = MutableLiveData("apiKey")
+    val apiKey: LiveData<String>
+        get() = _apiKey
+
+    fun setFCNToken(fcmToken: String) {
+        _fcmToken.value = fcmToken
+    }
+
+    fun setCurrentUserName(currentUserName: String) {
+        _currentUserName.value = currentUserName
+    }
 
     fun setName(userName: String) {
         _userName.value = userName
@@ -41,12 +82,24 @@ class ChatViewModel @Inject constructor(
         _uid.value = uid
     }
 
+    fun setSenderRoom(senderRoom: String) {
+        _senderRoom.value = senderRoom
+    }
+
+    fun setReceiverRoom(receiverRoom: String) {
+        _receiverRoom.value = receiverRoom
+    }
+
+    fun setApiKey(apiKey: String) {
+        _apiKey.value = apiKey
+    }
+
     fun addUserToDatabase(
         name: String,
         email: String,
         uid: String
     ) {
-        mDatabaseRef.child("user").child(uid).setValue(User(name, email, uid))
+        mDatabaseRef.child("user").child(uid).setValue(User(name, email, uid, fcmToken.value))
     }
 
     fun getDatabaseUsers(
@@ -73,13 +126,12 @@ class ChatViewModel @Inject constructor(
     }
 
     fun addDateToRecyclerView(
-        senderRoom: String,
         messageList: ArrayList<Message>,
         messageAdapter: MessageAdapter,
         chatRecyclerView: RecyclerView
     ) {
         //logic of adding data to recyclerView
-        mDatabaseRef.child("chats").child(senderRoom).child("messages")
+        mDatabaseRef.child("chats").child(senderRoom.value!!).child("messages")
             .addValueEventListener(object : ValueEventListener {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     //clear previous messageList
@@ -95,15 +147,12 @@ class ChatViewModel @Inject constructor(
                 }
 
                 override fun onCancelled(error: DatabaseError) {
-                    TODO("Not yet implemented")
                 }
             })
     }
 
     fun addMessageToDatabase(
         senderUid: String,
-        senderRoom: String,
-        receiverRoom: String,
         sendButtonImageView: ImageView,
         messageBoxEditText: EditText
     ) {
@@ -113,13 +162,90 @@ class ChatViewModel @Inject constructor(
             val messageObject = Message(message, senderUid)
 
             //create node of chat
-            mDatabaseRef.child("chats").child(senderRoom).child("messages").push()
+            mDatabaseRef.child("chats").child(senderRoom.value!!).child("messages").push()
                 .setValue(messageObject).addOnSuccessListener {
-                    mDatabaseRef.child("chats").child(receiverRoom).child("messages").push()
+                    mDatabaseRef.child("chats").child(receiverRoom.value!!).child("messages").push()
                         .setValue(messageObject)
+                    sendNotification(message)
                 }
             //clear message box after sending message
             messageBoxEditText.setText("")
         }
+    }
+
+    suspend fun getCurrentUserName() = suspendCoroutine<DataSnapshot> { continuation ->
+        mDatabaseRef.child("user").child(mAuth.currentUser!!.uid).child("userName").get()
+            .addOnSuccessListener {
+                setCurrentUserName(it.value.toString())
+                continuation.resume(it)
+            }
+    }
+
+    fun addFCMTokenToDatabase() {
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                val token = task.result
+                mDatabaseRef.child("user").child(mAuth.currentUser!!.uid).child("fcmToken")
+                    .setValue(token)
+            }
+        }
+    }
+
+    fun getFCMTokenFromDatabase(uid: String) {
+        mDatabaseRef.child("user").child(uid).child("fcmToken").get()
+            .addOnSuccessListener {
+                setFCNToken(it.value.toString())
+            }
+    }
+
+    private fun sendNotification(message: String) {
+        //current user name, message, current userid, other user token
+        mDatabaseRef.child("user").child(mAuth.currentUser!!.uid).child("userName").get()
+            .addOnSuccessListener {
+                try {
+                    val jsonObject = JSONObject()
+                    val notificationObj = JSONObject()
+                    notificationObj.put("title", it.value)
+                    notificationObj.put("body", message)
+
+                    val dataObj = JSONObject()
+                    dataObj.put("userName", it.value)
+                    dataObj.put("uid", mAuth.currentUser!!.uid)
+
+                    jsonObject.put("notification", notificationObj)
+                    jsonObject.put("data", dataObj)
+                    jsonObject.put("to", fcmToken.value)
+
+                    callApi(jsonObject)
+                } catch (_: Exception) {
+
+                }
+            }
+
+    }
+
+    fun callApi(jsonObject: JSONObject) {
+        val JSON: MediaType = "application/json".toMediaType()
+        val client = OkHttpClient()
+        val url = "https://fcm.googleapis.com/fcm/send"
+        val body = jsonObject.toString().toRequestBody(JSON)
+        val request = Request.Builder()
+            .url(url)
+            .post(body)
+            .header(
+                "Authorization",
+                "Bearer " + apiKey.value
+            )
+            .build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                //Not yet implemented
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                //Not yet implemented
+            }
+
+        })
     }
 }

@@ -7,12 +7,14 @@ import android.view.MenuInflater
 import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import androidx.activity.addCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.MenuHost
 import androidx.core.view.MenuProvider
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.chatroom.R
@@ -21,7 +23,10 @@ import com.example.chatroom.databinding.FragmentListOfUsersBinding
 import com.example.chatroom.domain.ChatViewModel
 import com.example.chatroom.ui.adapters.UserAdapter
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.database.DatabaseReference
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -34,6 +39,9 @@ class ListOfUsersFragment : Fragment() {
 
     @Inject
     lateinit var mAuth: FirebaseAuth
+
+    @Inject
+    lateinit var mDatabaseRef: DatabaseReference
 
     private lateinit var adapter: UserAdapter
     private val viewModel: ChatViewModel by activityViewModels()
@@ -48,7 +56,9 @@ class ListOfUsersFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        setUpViews()
+        viewLifecycleOwner.lifecycleScope.launch {
+            setUpViews()
+        }
     }
 
     override fun onDestroyView() {
@@ -56,10 +66,20 @@ class ListOfUsersFragment : Fragment() {
         _binding = null
     }
 
-    private fun setUpViews() {
+    private suspend fun setUpViews() = coroutineScope {
+
+        val job = launch {
+            viewModel.getCurrentUserName()
+        }
+        job.join()
         //show action bar
-        (requireActivity() as AppCompatActivity).supportActionBar?.title = "ChatRoom"
+        (requireActivity() as AppCompatActivity).supportActionBar?.title =
+            viewModel.currentUserName.value
         (requireActivity() as AppCompatActivity).supportActionBar?.show()
+
+        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner) {
+            findNavController().navigate(R.id.action_listOfUsersFragment_to_logInFragment)
+        }
 
         createMenu(mAuth)
 
@@ -76,14 +96,19 @@ class ListOfUsersFragment : Fragment() {
         val menuHost: MenuHost = requireActivity()
         menuHost.addMenuProvider(object : MenuProvider {
             override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
-                menuInflater.inflate(R.menu.menu, menu)
+                menuInflater.inflate(R.menu.list_of_users_menu, menu)
             }
 
             override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
                 // Handle the menu selection
                 if (menuItem.itemId == R.id.logOut) {
                     mAuth.signOut()
-                    findNavController().popBackStack()
+                    findNavController().navigate(R.id.action_listOfUsersFragment_to_logInFragment)
+                    return true
+                } else if (menuItem.itemId == R.id.deleteAccount) {
+                    mAuth.currentUser?.delete()
+                    mDatabaseRef.child("user").child(mAuth.currentUser!!.uid).removeValue()
+                    findNavController().navigate(R.id.action_listOfUsersFragment_to_logInFragment)
                     return true
                 }
                 return true
